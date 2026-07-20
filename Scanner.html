@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      text-align: center;
+      margin: 0;
+      padding: 20px;
+      background: #111;
+      color: #fff;
+    }
+    h2 { font-weight: 600; }
+    #reader { width: 320px; max-width: 90vw; margin: 10px auto; border-radius: 8px; overflow: hidden; }
+    #result {
+      font-size: 20px;
+      margin-top: 20px;
+      padding: 16px;
+      border-radius: 8px;
+      background: #222;
+      min-height: 28px;
+      transition: background 0.2s;
+    }
+    .ok { background: #1e7e34 !important; }
+    .fail { background: #a71d2a !important; }
+  </style>
+</head>
+<body>
+  <h2>Event Check-in Scanner</h2>
+  <div id="reader"></div>
+  <div id="result">Point camera at a QR code</div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
+  <script>
+    const resultDiv = document.getElementById('result');
+    let isProcessing = false;
+
+    function resetUI() {
+      isProcessing = false;
+      resultDiv.className = '';
+      resultDiv.textContent = 'Point camera at a QR code';
+    }
+
+    function handleResult(data) {
+      if (data.valid) {
+        resultDiv.className = 'ok';
+        resultDiv.textContent = '✅ ENTRY GRANTED — ' + data.name;
+      } else {
+        resultDiv.className = 'fail';
+        resultDiv.textContent = '❌ ' + data.reason + (data.name ? (' — ' + data.name) : '');
+      }
+      setTimeout(resetUI, 2500);
+    }
+
+    function handleError(err) {
+      resultDiv.className = 'fail';
+      resultDiv.textContent = '⚠️ ' + (err && err.message ? err.message : 'Server error');
+      setTimeout(resetUI, 2500);
+    }
+
+    function onScanSuccess(decodedText) {
+      if (isProcessing) return;
+      isProcessing = true;
+      resultDiv.className = '';
+      resultDiv.textContent = 'Checking...';
+
+      google.script.run
+        .withSuccessHandler(handleResult)
+        .withFailureHandler(handleError)
+        .validateTokenFromClient(decodedText);
+    }
+
+    const html5QrCode = new Html5Qrcode("reader");
+    html5QrCode.start(
+      { facingMode: "environment" },
+      { fps: 10, qrbox: 250 },
+      onScanSuccess
+    ).catch(err => {
+      resultDiv.className = 'fail';
+      resultDiv.textContent = 'Camera error: ' + err;
+    });
+  </script>
+</body>
+</html>
