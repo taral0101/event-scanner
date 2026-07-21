@@ -1,40 +1,73 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <base target="_top">
-  <style>
-    body {
-      font-family: Arial, sans-serif;
-      text-align: center;
-      margin: 0;
-      padding: 20px;
-      background: #111;
-      color: #fff;
-    }
-    h2 { font-weight: 600; }
-    #reader { width: 320px; max-width: 90vw; margin: 10px auto; border-radius: 8px; overflow: hidden; }
-    #result {
-      font-size: 20px;
-      margin-top: 20px;
-      padding: 16px;
-      border-radius: 8px;
-      background: #222;
-      min-height: 28px;
-      transition: background 0.2s;
-    }
-    .ok { background: #1e7e34 !important; }
-    .fail { background: #a71d2a !important; }
-  </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Event Check-in Scanner</title>
+<style>
+  body {
+    font-family: Arial, sans-serif;
+    text-align: center;
+    margin: 0;
+    padding: 20px;
+    background: #111;
+    color: #fff;
+  }
+  h2 { font-weight: 600; }
+  #reader { width: 320px; max-width: 90vw; margin: 10px auto; border-radius: 8px; overflow: hidden; }
+  #result {
+    font-size: 20px;
+    margin-top: 20px;
+    padding: 16px;
+    border-radius: 8px;
+    background: #222;
+    min-height: 28px;
+    transition: background 0.2s;
+  }
+  .ok { background: #1e7e34 !important; }
+  .fail { background: #a71d2a !important; }
+  #setup {
+    max-width: 420px;
+    margin: 0 auto 20px auto;
+    text-align: left;
+    font-size: 14px;
+    color: #ccc;
+  }
+  #setup input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 8px;
+    margin-top: 6px;
+    border-radius: 6px;
+    border: 1px solid #444;
+    background: #222;
+    color: #fff;
+  }
+</style>
 </head>
 <body>
   <h2>Event Check-in Scanner</h2>
+
+  <div id="setup">
+    <label for="webAppUrl">Paste your Apps Script Web App URL once (saved in this browser):</label>
+    <input id="webAppUrl" type="text" placeholder="https://script.google.com/macros/s/XXXXX/exec">
+  </div>
+
   <div id="reader"></div>
-  <div id="result">Point camera at a QR code</div>
+  <div id="result">Enter the Web App URL above, then point camera at a QR code</div>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
   <script>
     const resultDiv = document.getElementById('result');
+    const urlInput = document.getElementById('webAppUrl');
     let isProcessing = false;
+
+    // Remember the Web App URL locally so staff don't retype it every scan.
+    const saved = window.localStorage ? localStorage.getItem('eventScannerUrl') : null;
+    if (saved) urlInput.value = saved;
+    urlInput.addEventListener('change', () => {
+      if (window.localStorage) localStorage.setItem('eventScannerUrl', urlInput.value.trim());
+    });
 
     function resetUI() {
       isProcessing = false;
@@ -53,32 +86,74 @@
       setTimeout(resetUI, 2500);
     }
 
-    function handleError(err) {
-      resultDiv.className = 'fail';
-      resultDiv.textContent = '⚠️ ' + (err && err.message ? err.message : 'Server error');
-      setTimeout(resetUI, 2500);
+    // JSONP call — avoids CORS blocking that happens when fetch() is used
+    // from a page hosted on a different domain (GitHub Pages) calling
+    // Apps Script (script.google.com).
+    function jsonpRequest(url) {
+      const callbackName = 'jsonp_cb_' + Date.now();
+      const script = document.createElement('script');
+
+      window[callbackName] = function(data) {
+        handleResult(data);
+        delete window[callbackName];
+        script.remove();
+      };
+
+      script.onerror = function() {
+        resultDiv.className = 'fail';
+        resultDiv.textContent = '⚠️ Network error — check the Web App URL';
+        setTimeout(resetUI, 2500);
+        delete window[callbackName];
+        script.remove();
+      };
+
+      script.src = url + (url.indexOf('?') >= 0 ? '&' : '?') + 'callback=' + callbackName;
+      document.body.appendChild(script);
     }
 
     function onScanSuccess(decodedText) {
       if (isProcessing) return;
+      const webAppUrl = urlInput.value.trim();
+      if (!webAppUrl) {
+        resultDiv.className = 'fail';
+        resultDiv.textContent = 'Paste the Web App URL above first';
+        return;
+      }
       isProcessing = true;
       resultDiv.className = '';
       resultDiv.textContent = 'Checking...';
 
-      google.script.run
-        .withSuccessHandler(handleResult)
-        .withFailureHandler(handleError)
-        .validateTokenFromClient(decodedText);
+      jsonpRequest(webAppUrl + '?token=' + encodeURIComponent(decodedText));
     }
 
     const html5QrCode = new Html5Qrcode("reader");
-    html5QrCode.start(
-      { facingMode: "environment" },
-      { fps: 10, qrbox: 250 },
-      onScanSuccess
-    ).catch(err => {
-      resultDiv.className = 'fail';
-      resultDiv.textContent = 'Camera error: ' + err;
+
+    function startScanner(cameraConfig) {
+      return html5QrCode.start(
+        cameraConfig,
+        { fps: 10, qrbox: 250 },
+        onScanSuccess
+      );
+    }
+
+    // Try rear camera first; if that specific request fails, fall back to
+    // whatever camera is available (front camera, laptop webcam, etc).
+    startScanner({ facingMode: "environment" }).catch(() => {
+      Html5Qrcode.getCameras().then(devices => {
+        if (devices && devices.length) {
+          startScanner({ deviceId: { exact: devices[devices.length - 1].id } })
+            .catch(err => {
+              resultDiv.className = 'fail';
+              resultDiv.textContent = 'Camera error: ' + err;
+            });
+        } else {
+          resultDiv.className = 'fail';
+          resultDiv.textContent = 'No camera found on this device';
+        }
+      }).catch(err => {
+        resultDiv.className = 'fail';
+        resultDiv.textContent = 'Camera error: ' + err;
+      });
     });
   </script>
 </body>
